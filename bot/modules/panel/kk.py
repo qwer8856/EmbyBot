@@ -2,6 +2,7 @@
 kk - 纯装x
 赠与账户，禁用，删除
 """
+import asyncio
 import pyrogram
 from pyrogram import filters
 from pyrogram.errors import BadRequest
@@ -237,3 +238,221 @@ async def fuck_off_m(_, call):
     except pyrogram.errors.UserAdminInvalid:
         await editMessage(call,
                           f"⚠️ 打咩，no，机器人不可以对群组管理员出手喔，请[自己](tg://user?id={call.from_user.id})解决")
+
+
+# 设备管理
+@bot.on_callback_query(filters.regex('user_devices_manage'))
+async def user_devices_manage(_, call):
+    if not judge_admins(call.from_user.id):
+        return await call.answer("请不要以下犯上 ok？", show_alert=True)
+
+    await call.answer("🔍 正在获取设备信息...")
+    uid = int(call.data.split("-")[1])
+    
+    try:
+        first = await bot.get_chat(uid)
+        e = sql_get_emby(tg=uid)
+        
+        if e is None or e.embyid is None:
+            return await editMessage(call, f'💢 [{first.first_name}](tg://user?id={uid}) 还没有注册账户。', timer=60)
+        
+        # 获取用户的已注册设备
+        success_devices, devices = await emby.get_user_devices(e.embyid)
+        # 获取当前活跃会话
+        success_sessions, sessions = await emby.get_user_sessions(e.embyid)
+        
+        if not success_devices:
+            return await editMessage(call, f'💢 [{first.first_name}](tg://user?id={uid}) 获取设备信息失败。', timer=60)
+        
+        user_devices = devices if success_devices else []
+        active_sessions = sessions if success_sessions else []
+        
+        if not user_devices:
+            return await editMessage(call, f'💢 [{first.first_name}](tg://user?id={uid}) 没有注册设备。', timer=60)
+        
+        # 构建设备信息
+        text = f'**💠 [{first.first_name}](tg://user?id={uid}) 的设备管理**\n\n'
+        text += f'**已注册设备数：{len(user_devices)}**\n'
+        text += f'**当前活跃会话：{len(active_sessions)}**\n\n'
+        text += '**设备列表：**\n'
+        
+        # 创建设备按钮
+        keyboard = []
+        device_details = ""
+        
+        for i, device in enumerate(user_devices, 1):
+            device_id = device.get("Id", "")
+            device_name = device.get("Name", "未知设备")
+            app_name = device.get("AppName", "未知应用")
+            app_version = device.get("AppVersion", "")
+            last_activity = device.get("LastUserActivityDate", "").split("T")[0] if device.get("LastUserActivityDate") else "未知"
+            
+            # 检查是否有活跃会话
+            is_active = any(
+                session.get("DeviceId") == device_id 
+                for session in active_sessions
+            )
+            
+            status = "🟢在线" if is_active else "⚫离线"
+            device_details += f'{i}. {device_name} | {app_name} {app_version} ({status})\n'
+            device_details += f'   最后活动: {last_activity}\n\n'
+            
+            # 为每个设备创建按钮
+            if len(device_name + app_name) > 25:
+                button_text = f"{device_name[:15]}...| {app_name}"
+            else:
+                button_text = f"{device_name} | {app_name}"
+                
+            keyboard.append([[f"🗑️ {button_text}", f'device_action-{uid}-{device_id}']])
+        
+        text += device_details
+        text += '点击设备按钮选择操作方式\n'
+        text += '🔸 **终止会话**：断开当前连接，设备仍保持注册\n'
+        text += '🔸 **删除设备**：彻底移除设备注册，需重新认证'
+        
+        keyboard.append([['🔙 返回', f'kk_back-{uid}'], ['❌ 关闭', 'closeit']])
+        
+        from bot.func_helper.fix_bottons import ikb
+        await editMessage(call, text, buttons=ikb(keyboard))
+        
+    except Exception as e:
+        LOGGER.error(f"设备管理错误: {str(e)}")
+        await editMessage(call, f'💢 获取设备信息失败：{str(e)}', timer=60)
+
+
+# 设备操作选择
+@bot.on_callback_query(filters.regex('device_action'))
+async def device_action(_, call):
+    if not judge_admins(call.from_user.id):
+        return await call.answer("请不要以下犯上 ok？", show_alert=True)
+
+    await call.answer("🎯 选择操作方式")
+    
+    try:
+        parts = call.data.split("-")
+        uid = int(parts[1])
+        device_id = parts[2]
+        
+        first = await bot.get_chat(uid)
+        
+        text = f'**🎯 设备操作选择**\n\n'
+        text += f'**用户：** [{first.first_name}](tg://user?id={uid})\n'
+        text += f'**设备ID：** `{device_id}`\n\n'
+        text += '请选择操作方式：\n\n'
+        text += '🔸 **终止会话**：断开当前连接，设备仍保持注册\n'
+        text += '🔸 **删除设备**：彻底移除设备注册，需重新认证'
+        
+        keyboard = [
+            [['⚡ 终止会话', f'kick_session-{uid}-{device_id}']],
+            [['🗑️ 删除设备', f'delete_device-{uid}-{device_id}']],
+            [['🔙 返回设备列表', f'user_devices_manage-{uid}'], ['❌ 关闭', 'closeit']]
+        ]
+        
+        from bot.func_helper.fix_bottons import ikb
+        await editMessage(call, text, buttons=ikb(keyboard))
+        
+    except Exception as e:
+        LOGGER.error(f"设备操作选择错误: {str(e)}")
+        await editMessage(call, f'💢 操作失败：{str(e)}', timer=5)
+
+
+# 终止会话
+@bot.on_callback_query(filters.regex('kick_session'))
+async def kick_session(_, call):
+    if not judge_admins(call.from_user.id):
+        return await call.answer("请不要以下犯上 ok？", show_alert=True)
+
+    await call.answer("⚡ 正在终止会话...")
+    
+    try:
+        parts = call.data.split("-")
+        uid = int(parts[1])
+        device_id = parts[2]
+        
+        first = await bot.get_chat(uid)
+        e = sql_get_emby(tg=uid)
+        
+        # 获取该设备的活跃会话
+        success, sessions = await emby.get_user_sessions(e.embyid)
+        if not success:
+            return await editMessage(call, f'❌ 获取会话失败', timer=5)
+        
+        # 找到对应设备的会话
+        target_sessions = [s for s in sessions if s.get("DeviceId") == device_id]
+        
+        if not target_sessions:
+            return await editMessage(call, f'💡 该设备当前没有活跃会话', timer=5)
+        
+        # 终止所有相关会话
+        success_count = 0
+        for session in target_sessions:
+            session_id = session.get("Id")
+            if await emby.terminate_session(session_id, f"管理员 {call.from_user.first_name} 终止会话"):
+                success_count += 1
+        
+        if success_count > 0:
+            await editMessage(call, f'✅ 已成功终止 [{first.first_name}](tg://user?id={uid}) 的 {success_count} 个会话\n\n正在返回设备列表...', timer=3)
+            LOGGER.info(f"【设备管理】：管理员 {call.from_user.id} 终止了用户 {uid} 的设备会话，设备ID: {device_id}")
+        else:
+            await editMessage(call, f'❌ 终止会话失败', timer=5)
+            return
+            
+        # 2秒后返回设备管理页面
+        await asyncio.sleep(2)
+        call.data = f'user_devices_manage-{uid}'
+        await user_devices_manage(_, call)
+            
+    except Exception as e:
+        LOGGER.error(f"终止会话错误: {str(e)}")
+        await editMessage(call, f'💢 终止会话失败：{str(e)}', timer=5)
+
+
+# 删除设备
+@bot.on_callback_query(filters.regex('delete_device'))
+async def delete_device_callback(_, call):
+    if not judge_admins(call.from_user.id):
+        return await call.answer("请不要以下犯上 ok？", show_alert=True)
+
+    await call.answer("🗑️ 正在删除设备...")
+    
+    try:
+        parts = call.data.split("-")
+        uid = int(parts[1])
+        device_id = parts[2]
+        
+        first = await bot.get_chat(uid)
+        
+        # 删除设备注册
+        success = await emby.delete_device(device_id)
+        
+        if success:
+            await editMessage(call, f'✅ 已成功删除 [{first.first_name}](tg://user?id={uid}) 的设备\n\n设备已从服务器彻底移除，需重新认证\n\n正在返回设备列表...', timer=3)
+            LOGGER.info(f"【设备管理】：管理员 {call.from_user.id} 删除了用户 {uid} 的设备，设备ID: {device_id}")
+            
+            # 2秒后返回设备管理页面
+            await asyncio.sleep(2)
+            call.data = f'user_devices_manage-{uid}'
+            await user_devices_manage(_, call)
+        else:
+            await editMessage(call, f'❌ 删除设备失败，请检查服务器连接', timer=5)
+            
+    except Exception as e:
+        LOGGER.error(f"删除设备错误: {str(e)}")
+        await editMessage(call, f'💢 删除设备失败：{str(e)}', timer=5)
+
+
+# 返回kk面板
+@bot.on_callback_query(filters.regex('kk_back'))
+async def kk_back(_, call):
+    if not judge_admins(call.from_user.id):
+        return await call.answer("请不要以下犯上 ok？", show_alert=True)
+
+    uid = int(call.data.split("-")[1])
+    
+    try:
+        first = await bot.get_chat(uid)
+        text, keyboard = await cr_kk_ikb(uid, first.first_name)
+        await editMessage(call, text, buttons=keyboard)
+    except Exception as e:
+        LOGGER.error(f"返回kk面板错误: {str(e)}")
+        await editMessage(call, f'💢 返回失败：{str(e)}', timer=5)

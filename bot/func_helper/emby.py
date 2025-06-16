@@ -643,6 +643,72 @@ class Embyservice(metaclass=Singleton):
     #         return None
     #     return None
 
+    async def get_user_sessions(self, user_id: str = None):
+        """
+        获取用户的活跃会话
+        :param user_id: 用户ID，如果为None则获取所有会话
+        :return: tuple (success, sessions_list)
+        """
+        try:
+            response = r.get(f"{self.url}/emby/Sessions", headers=self.headers)
+            if response.status_code != 200:
+                return False, {'error': "🤕Emby 服务器连接失败!"}
+            
+            sessions = response.json()
+            
+            if user_id:
+                # 过滤指定用户的会话
+                user_sessions = [session for session in sessions if session.get("UserId") == user_id]
+                return True, user_sessions
+            else:
+                return True, sessions
+                
+        except Exception as e:
+            LOGGER.error(f"获取用户会话失败: {str(e)}")
+            return False, {'error': str(e)}
+
+    async def get_user_devices(self, user_id: str = None):
+        """
+        获取用户的已注册设备列表
+        :param user_id: 用户ID，如果为None则获取所有设备
+        :return: tuple (success, devices_list)
+        """
+        try:
+            response = r.get(f"{self.url}/emby/Devices", headers=self.headers)
+            if response.status_code != 200:
+                return False, {'error': "🤕Emby 服务器连接失败!"}
+            
+            devices = response.json().get("Items", [])
+            
+            if user_id:
+                # 过滤指定用户的设备
+                user_devices = [device for device in devices if device.get("LastUserId") == user_id]
+                return True, user_devices
+            else:
+                return True, devices
+                
+        except Exception as e:
+            LOGGER.error(f"获取用户设备失败: {str(e)}")
+            return False, {'error': str(e)}
+
+    async def delete_device(self, device_id: str):
+        """
+        删除设备注册记录（更彻底的踢出方式）
+        :param device_id: 设备ID
+        :return: bool 是否成功
+        """
+        try:
+            response = r.delete(f"{self.url}/emby/Devices?id={device_id}", headers=self.headers)
+            if response.status_code in [200, 204]:
+                LOGGER.info(f"成功删除设备 {device_id}")
+                return True
+            else:
+                LOGGER.error(f"删除设备失败 {device_id}: status_code={response.status_code}")
+                return False
+        except Exception as e:
+            LOGGER.error(f"删除设备异常 {device_id}: {str(e)}")
+            return False
+
 
 # 实例
 emby = Embyservice(emby_url, emby_api)

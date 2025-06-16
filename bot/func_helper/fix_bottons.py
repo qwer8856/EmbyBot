@@ -380,6 +380,10 @@ async def cr_kk_ikb(uid, first):
         if name != '无账户信息':
             ban = "🌟 解除禁用" if lv == "**已禁用**" else '💢 禁用账户'
             keyboard = [[ban, f'user_ban-{uid}'], ['⚠️ 删除账户', f'closeemby-{uid}']]
+            
+            # 添加设备管理按钮
+            keyboard.append(['💠 设备管理', f'user_devices_manage-{uid}'])
+            
             if len(extra_emby_libs) > 0:
                 success, rep = emby.user(embyid=embyid)
                 if success:
